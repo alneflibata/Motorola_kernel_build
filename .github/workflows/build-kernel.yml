@@ -20,13 +20,15 @@ jobs:
       - name: Install Dependencies & Fix Libs
         run: |
           sudo apt-get update
-          # 添加 Ubuntu 20.04 源以获取旧版包
-          echo "deb http://security.ubuntu.com/ubuntu focal-security main universe" | sudo tee /etc/apt/sources.list.d/focal-security.list
-          sudo apt-get update
-          sudo apt-get install -y python2 libncurses5 libtinfo5 libncurses5-dev libssl-dev \
+          # 安装 python3 和必要的库
+          sudo apt-get install -y python3 libncurses5 libtinfo5 libncurses5-dev libssl-dev \
             bc build-essential flex bison lld libelf-dev libselinux1-dev
           
-          # 强制软链接修复 Clang 找不到库的问题
+          # 【核心修复 1】：解决 python2 找不到的问题
+          # 建立软链接，让系统调用 python 时实际运行的是 python3
+          sudo ln -sf /usr/bin/python3 /usr/bin/python
+          
+          # 【核心修复 2】：解决 Clang 找不到 libtinfo.so.5 的问题
           sudo ln -sf /usr/lib/x86_64-linux-gnu/libtinfo.so.6 /usr/lib/x86_64-linux-gnu/libtinfo.so.5
           sudo ln -sf /usr/lib/x86_64-linux-gnu/libncurses.so.6 /usr/lib/x86_64-linux-gnu/libncurses.so.5
 
