@@ -17,16 +17,24 @@ jobs:
           node-version: '20'
 
       # 2. 核心：修复 Ubuntu 22.04 缺失的旧版依赖 (python2, libncurses5, libtinfo5)
-      - name: Install Dependencies & Fix Libs
+      - name: Install Dependencies & Force Link Libs
         run: |
           sudo apt-get update
-          # 安装 python3 和必要的库
-          sudo apt-get install -y python3 libncurses5 libtinfo5 libncurses5-dev libssl-dev \
-            bc build-essential flex bison lld libelf-dev libselinux1-dev
+          # 1. 安装当前系统存在的最新版库
+          sudo apt-get install -y python3 python-is-python3 libncurses6 libncurses-dev \
+            libtinfo6 libssl-dev bc build-essential flex bison lld libelf-dev libselinux1-dev
+
+          # 2. 核心：建立软链接欺骗 Clang 编译器 (解决 libtinfo.so.5 缺失)
+          # 获取当前库的实际路径并链接
+          LIBTINFO_PATH=$(find /usr/lib/x86_64-linux-gnu -name "libtinfo.so.6" | head -n 1)
+          LIBNCURSES_PATH=$(find /usr/lib/x86_64-linux-gnu -name "libncurses.so.6" | head -n 1)
           
-          # 【核心修复 1】：解决 python2 找不到的问题
-          # 建立软链接，让系统调用 python 时实际运行的是 python3
-          sudo ln -sf /usr/bin/python3 /usr/bin/python
+          sudo ln -sf $LIBTINFO_PATH /usr/lib/x86_64-linux-gnu/libtinfo.so.5
+          sudo ln -sf $LIBNCURSES_PATH /usr/lib/x86_64-linux-gnu/libncurses.so.5
+          
+          # 3. 验证链接是否成功
+          ls -l /usr/lib/x86_64-linux-gnu/libtinfo.so.5
+
           
           # 【核心修复 2】：解决 Clang 找不到 libtinfo.so.5 的问题
           sudo ln -sf /usr/lib/x86_64-linux-gnu/libtinfo.so.6 /usr/lib/x86_64-linux-gnu/libtinfo.so.5
