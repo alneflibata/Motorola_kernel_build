@@ -1,84 +1,88 @@
-name: Build Kernel
-
+name: Build Motorola Edge SM8250 KernelSU
 
 on:
   workflow_dispatch:
 
-
 jobs:
-  build-kernel:
+  build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Setup Node.js 20
+      - name: Checkout Build Script
+        uses: actions/checkout@v4
+
+      # 1. 升级 Node.js 到 20 以上版本
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
-      - name: Setup environment
+          node-version: '20'
+
+      # 2. 核心：修复 Ubuntu 22.04 缺失的旧版依赖 (python2, libncurses5, libtinfo5)
+      - name: Install Dependencies & Fix Libs
         run: |
-          echo "ANYKERNEL_SOURCE=$(cat config.env | grep -w "ANYKERNEL_SOURCE" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
-          echo "ANYKERNEL_SOURCE_BRANCH=$(cat config.env | grep -w "ANYKERNEL_SOURCE_BRANCH" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
-          echo "KERNEL_SOURCE=$(cat config.env | grep -w "KERNEL_SOURCE" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
-          echo "KERNEL_SOURCE_BRANCH=$(cat config.env | grep -w "KERNEL_SOURCE_BRANCH" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
-          echo "KERNEL_CONFIG=$(cat config.env | grep -w "KERNEL_CONFIG" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
-          echo "BUILD_ARGS=$(cat config.env | grep -w "BUILD_ARGS" | head -n 1 | cut -d ":" -f 2)" >> $GITHUB_ENV
           sudo apt-get update
-          # 安装 Python2 的替代方案 (Ubuntu 22.04 需要从外部源或通过 python-is-python3 绕过)
-          # 如果内核脚本严格依赖 python2，我们需要手动安装它：
-          sudo apt-get install -y python2 || sudo apt-get install -y python-is-python3
+          # 添加 Ubuntu 20.04 源以获取旧版包
+          echo "deb http://security.ubuntu.com/ubuntu focal-security main universe" | sudo tee /etc/apt/sources.list.d/focal-security.list
+          sudo apt-get update
+          sudo apt-get install -y python2 libncurses5 libtinfo5 libncurses5-dev libssl-dev \
+            bc build-essential flex bison lld libelf-dev libselinux1-dev
           
-          # 安装 libncurses5 和其他必备组件
-          # 针对 Ubuntu 22.04，libncurses5 需要单独处理
-          sudo apt-get install -y libncurses5 libncurses5-dev || sudo apt-get install -y libncurses6
-      - name: Pull toolchain
+          # 强制软链接修复 Clang 找不到库的问题
+          sudo ln -sf /usr/lib/x86_64-linux-gnu/libtinfo.so.6 /usr/lib/x86_64-linux-gnu/libtinfo.so.5
+          sudo ln -sf /usr/lib/x86_64-linux-gnu/libncurses.so.6 /usr/lib/x86_64-linux-gnu/libncurses.so.5
+
+      # 3. 下载 AOSP 官方 Clang (r487747c 兼容性极佳)
+      - name: Setup Toolchain
         run: |
-          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 aarch64-linux-android-4.9
-          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 arm-linux-androideabi-4.9
-          git clone https://github.com/xiangfeidexiaohuo/Snapdragon-LLVM.git clang
-          
-      - name: Pull kernel source
-        run: |
-          git clone --depth=1 ${{ env.KERNEL_SOURCE }} -b ${{ env.KERNEL_SOURCE_BRANCH }} kernel-source
-          
-      - name: KernelSU
-        run: |
-          cd kernel-source
-          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s v0.9.5
+          mkdir -p clang
+          cd clang
+          wget https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r487747c.tar.gz
+          tar -xf *.tar.gz
           cd ..
 
-      - name: Build kernel
+      # 4. 克隆内核源码并集成 KernelSU
+      - name: Clone Kernel Source & Integrate KSU
         run: |
-          export KBUILD_BUILD_USER="hiahia"
-          export PATH=$GITHUB_WORKSPACE/clang/bin:${PATH}
-          args="                  ARCH=arm64 \
-                                  O=../out \
-                                  ${{ env.BUILD_ARGS }} \
-                                  CLANG_TRIPLE=aarch64-linux-gnu- \
-                                  CROSS_COMPILE=$GITHUB_WORKSPACE/aarch64-linux-android-4.9/bin/aarch64-linux-android- \
-                                  CROSS_COMPILE_ARM32=$GITHUB_WORKSPACE/arm-linux-androideabi-4.9/bin/arm-linux-androideabi- "
+          git clone --depth=1 -b erofs https://github.com/tao1996/android_kernel_motorola_sm8250.git kernel-source
           cd kernel-source
-          clang -v
-          make ${args} ${{ env.KERNEL_CONFIG }}
-          make -j$(nproc --all) ${args}
+          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
 
-      - name: Package kernel
+      # 5. 编译内核
+      - name: Build Kernel
         run: |
-          git clone --depth=1 ${{ env.ANYKERNEL_SOURCE }} -b ${{ env.ANYKERNEL_SOURCE_BRANCH }} AnyKernel3 && rm -rf AnyKernel3/.git AnyKernel3/.github AnyKernel3/LICENSE AnyKernel3/README.md
-          if [[ -f out/arch/arm64/boot/Image.gz-dtb ]]; then
-            cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/Image.gz-dtb
-          elif [[ -f out/arch/arm64/boot/Image-dtb ]]; then
-            cp out/arch/arm64/boot/Image-dtb AnyKernel3/Image-dtb
-          elif [[ -f out/arch/arm64/boot/Image.gz ]]; then
-            cp out/arch/arm64/boot/Image.gz AnyKernel3/Image.gz
-          elif [[ -f out/arch/arm64/boot/Image ]]; then
-            cp out/arch/arm64/boot/Image AnyKernel3/Image
-          fi
-          if [ -f out/arch/arm64/boot/dtbo.img ]; then
-            cp out/arch/arm64/boot/dtbo.img AnyKernel3/dtbo.img
-          fi
+          cd kernel-source
+          export PATH=$(pwd)/../clang/bin:$PATH
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          
+          # 生成配置
+          make O=out nio_defconfig
+          
+          # 启用 KernelSU 配置
+          scripts/config --file out/.config -e KERNELSU
+          
+          # 正式开始编译
+          make -j$(nproc) O=out \
+                      CC=clang \
+                      LD=ld.lld \
+                      AR=llvm-ar \
+                      NM=llvm-nm \
+                      OBJCOPY=llvm-objcopy \
+                      OBJDUMP=llvm-objdump \
+                      STRIP=llvm-strip
 
-      - name: Upload kernel to artifact
+      # 6. 使用 AnyKernel3 打包
+      - name: Package with AnyKernel3
+        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
+          cp kernel-source/out/arch/arm64/boot/Image.gz AnyKernel3/
+          cd AnyKernel3
+          zip -r9 ../KernelSU-Motorola-Nio.zip * -x .git* README.md
+
+      # 7. 上传成果
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AnyKernel3_kernel
-          path: AnyKernel3/*
+          name: Motorola-Edge-KSU-Kernel
+          path: KernelSU-Motorola-Nio.zip
